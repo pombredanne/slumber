@@ -15,7 +15,7 @@ def url_join(base, *args):
     """
     scheme, netloc, path, query, fragment = urlparse.urlsplit(base)
     path = path if len(path) else "/"
-    path = posixpath.join(path, *[str(x) for x in args])
+    path = posixpath.join(path, *[('%s' % x) for x in args])
     return urlparse.urlunsplit([scheme, netloc, path, query, fragment])
 
 
@@ -88,61 +88,77 @@ class Resource(ResourceAttributesMixin, object):
 
         return self.__class__(**kwargs)
 
-    def get_serializer(self):
-        return Serializer(default_format=self._store["format"])
-
     def _request(self, method, data=None, params=None):
-        s = self.get_serializer()
+        s = self._store["serializer"]
         url = self._store["base_url"]
 
         if self._store["append_slash"] and not url.endswith("/"):
             url = url + "/"
 
-        resp = self._store["session"].request(method, url, data=data, params=params, headers={"content-type": s.get_content_type()})
+        resp = self._store["session"].request(method, url, data=data, params=params, headers={"content-type": s.get_content_type(), "accept": s.get_content_type()})
 
         if 400 <= resp.status_code <= 499:
             raise exceptions.HttpClientError("Client Error %s: %s" % (resp.status_code, url), response=resp, content=resp.content)
         elif 500 <= resp.status_code <= 599:
             raise exceptions.HttpServerError("Server Error %s: %s" % (resp.status_code, url), response=resp, content=resp.content)
 
+        self._ = resp
+
         return resp
 
-    def get(self, **kwargs):
-        s = self.get_serializer()
+    def _handle_redirect(self, resp, **kwargs):
+        # @@@ Hacky, see description in __call__
+        resource_obj = self(url_override=resp.headers["location"])
+        return resource_obj.get(params=kwargs)
 
+    def _try_to_serialize_response(self, resp):
+        s = self._store["serializer"]
+
+        if resp.headers.get("content-type", None):
+            content_type = resp.headers.get("content-type").split(";")[0].strip()
+
+            try:
+                stype = s.get_serializer(content_type=content_type)
+            except exceptions.SerializerNotAvailable:
+                return resp.content
+
+            return stype.loads(resp.content)
+        else:
+            return resp.content
+
+    def get(self, **kwargs):
         resp = self._request("GET", params=kwargs)
         if 200 <= resp.status_code <= 299:
-            if resp.status_code == 200:
-                return s.loads(resp.content)
-            else:
-                return resp.content
+            return self._try_to_serialize_response(resp)
         else:
             return  # @@@ We should probably do some sort of error here? (Is this even possible?)
 
     def post(self, data, **kwargs):
-        s = self.get_serializer()
+        s = self._store["serializer"]
 
         resp = self._request("POST", data=s.dumps(data), params=kwargs)
         if 200 <= resp.status_code <= 299:
-            if resp.status_code == 201:
-                # @@@ Hacky, see description in __call__
-                resource_obj = self(url_override=resp.headers["location"])
-                return resource_obj.get(params=kwargs)
-            else:
-                return resp.content
+            return self._try_to_serialize_response(resp)
+        else:
+            # @@@ Need to be Some sort of Error Here or Something
+            return
+
+    def patch(self, data, **kwargs):
+        s = self._store["serializer"]
+
+        resp = self._request("PATCH", data=s.dumps(data), params=kwargs)
+        if 200 <= resp.status_code <= 299:
+            return self._try_to_serialize_response(resp)
         else:
             # @@@ Need to be Some sort of Error Here or Something
             return
 
     def put(self, data, **kwargs):
-        s = self.get_serializer()
+        s = self._store["serializer"]
 
         resp = self._request("PUT", data=s.dumps(data), params=kwargs)
         if 200 <= resp.status_code <= 299:
-            if resp.status_code == 204:
-                return True
-            else:
-                return True  # @@@ Should this really be True?
+            return self._try_to_serialize_response(resp)
         else:
             return False
 
@@ -159,12 +175,16 @@ class Resource(ResourceAttributesMixin, object):
 
 class API(ResourceAttributesMixin, object):
 
-    def __init__(self, base_url=None, auth=None, format=None, append_slash=True):
+    def __init__(self, base_url=None, auth=None, format=None, append_slash=True, session=None, serializer=None):
+        if serializer is None:
+            s = Serializer(default=format)
+
         self._store = {
             "base_url": base_url,
             "format": format if format is not None else "json",
             "append_slash": append_slash,
-            "session": requests.session(auth=auth),
+            "session": requests.session(auth=auth) if session is None else session,
+            "serializer": s,
         }
 
         # Do some Checks for Required Values

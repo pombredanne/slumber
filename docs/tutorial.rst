@@ -44,6 +44,8 @@ which you can see at http://slumber.in/api/v1/.
     >>> new = api.note.post({"title": "My Test Note", "content": "This is the content of my Test Note!"})
     >>> ## PUT http://slumber.in/api/v1/note/{id}/
     >>> api.note(new["id"]).put({"content": "I just changed the content of my Test Note!"})
+    >>> ## PATCH http://slumber.in/api/v1/note/{id}/
+    >>> api.note(new["id"]).patch({"content": "Wat!"})
     >>> ## GET http://slumber.in/api/v1/note/{id}/
     >>> api.note(new["id"]).get()
     >>> ## DELETE http://slumber.in/api/v1/note/{id}/
@@ -60,7 +62,7 @@ authentication, you could do so like::
 If you wanted to filter the Slumber demo api for notes that start with Bacon, you could do::
 
     >>> import slumber
-    >>> api = slumber.API("http://slumber.in/api/v1/", authentication={"name": "demo", "password": "demo"})
+    >>> api = slumber.API("http://slumber.in/api/v1/", auth=("demo", "demo"))
     >>> ## GET http://slumber.in/api/v1/note/?title__startswith=Bacon
     >>> api.note.get(title__startswith="Bacon")
 

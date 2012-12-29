@@ -1,5 +1,20 @@
+.. :changelog:
+
 Changelog
 =========
+
+
+0.4.2
+-----
+
+* Support decoded unicode url fragments - Thanks @collinwat
+
+
+0.4.1
+-----
+
+* Added a ``session`` kwarg to ``slumber.API`` allowing passing a ``requests`` session
+  that will be used instead of the slumber created one
 
 0.4.0
 -----
