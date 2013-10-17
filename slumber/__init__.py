@@ -88,14 +88,21 @@ class Resource(ResourceAttributesMixin, object):
 
         return self.__class__(**kwargs)
 
-    def _request(self, method, data=None, params=None):
+    def _request(self, method, data=None, files=None, params=None):
         s = self._store["serializer"]
         url = self._store["base_url"]
 
         if self._store["append_slash"] and not url.endswith("/"):
             url = url + "/"
 
-        resp = self._store["session"].request(method, url, data=data, params=params, headers={"content-type": s.get_content_type(), "accept": s.get_content_type()})
+        headers = {"accept": s.get_content_type()}
+
+        if not files:
+            headers["content-type"] = s.get_content_type()
+            if data is not None:
+                data = s.dumps(data)
+
+        resp = self._store["session"].request(method, url, data=data, params=params, files=files, headers=headers)
 
         if 400 <= resp.status_code <= 499:
             raise exceptions.HttpClientError("Client Error %s: %s" % (resp.status_code, url), response=resp, content=resp.content)
@@ -133,30 +140,29 @@ class Resource(ResourceAttributesMixin, object):
         else:
             return  # @@@ We should probably do some sort of error here? (Is this even possible?)
 
-    def post(self, data, **kwargs):
+    def post(self, data=None, files=None, **kwargs):
         s = self._store["serializer"]
 
-        resp = self._request("POST", data=s.dumps(data), params=kwargs)
+        resp = self._request("POST", data=data, files=files, params=kwargs)
         if 200 <= resp.status_code <= 299:
             return self._try_to_serialize_response(resp)
         else:
             # @@@ Need to be Some sort of Error Here or Something
             return
 
-    def patch(self, data, **kwargs):
+    def patch(self, data=None, files=None, **kwargs):
         s = self._store["serializer"]
 
-        resp = self._request("PATCH", data=s.dumps(data), params=kwargs)
+        resp = self._request("PATCH", data=data, files=files, params=kwargs)
         if 200 <= resp.status_code <= 299:
             return self._try_to_serialize_response(resp)
         else:
             # @@@ Need to be Some sort of Error Here or Something
             return
 
-    def put(self, data, **kwargs):
-        s = self._store["serializer"]
+    def put(self, data=None, files=None, **kwargs):
+        resp = self._request("PUT", data=data, files=files, params=kwargs)
 
-        resp = self._request("PUT", data=s.dumps(data), params=kwargs)
         if 200 <= resp.status_code <= 299:
             return self._try_to_serialize_response(resp)
         else:
@@ -177,14 +183,18 @@ class API(ResourceAttributesMixin, object):
 
     def __init__(self, base_url=None, auth=None, format=None, append_slash=True, session=None, serializer=None):
         if serializer is None:
-            s = Serializer(default=format)
+            serializer = Serializer(default=format)
+
+        if session is None:
+            session = requests.session()
+            session.auth = auth
 
         self._store = {
             "base_url": base_url,
             "format": format if format is not None else "json",
             "append_slash": append_slash,
-            "session": requests.session(auth=auth) if session is None else session,
-            "serializer": s,
+            "session": session,
+            "serializer": serializer,
         }
 
         # Do some Checks for Required Values
