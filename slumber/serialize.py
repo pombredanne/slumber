@@ -57,7 +57,7 @@ class YamlSerializer(BaseSerializer):
     key = "yaml"
 
     def loads(self, data):
-        return yaml.safe_load(data)
+        return yaml.safe_load(str(data))
 
     def dumps(self, data):
         return yaml.dump(data)

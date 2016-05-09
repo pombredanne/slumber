@@ -7,6 +7,23 @@ Changelog
 development version
 -------------------
 
+0.7.1
+-----
+
+* Correct support for UTF encoded responses.
+
+0.6.2
+-----
+
+* Further Python 3 compatibility fixes, many thanks to Alexander Shchepetilnikov (irqed)
+
+0.6.1
+-----
+
+* Remove ``simplejson`` dependency.
+
+* Support range now Python 2.6 - Python 3.4
+
 
 0.6.0
 -----

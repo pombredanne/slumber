@@ -1,45 +1,42 @@
-import posixpath
-import urlparse
-
 import requests
 
-from slumber import exceptions
-from slumber.serialize import Serializer
+try:
+    from urllib.parse import urlparse, urlsplit, urlunsplit
+except ImportError:
+    from urlparse import urlparse, urlsplit, urlunsplit
+
+from . import exceptions
+from .serialize import Serializer
+from .utils import url_join, iterator, copy_kwargs
 
 __all__ = ["Resource", "API"]
 
 
-def url_join(base, *args):
-    """
-    Helper function to join an arbitrary number of url segments together.
-    """
-    scheme, netloc, path, query, fragment = urlparse.urlsplit(base)
-    path = path if len(path) else "/"
-    path = posixpath.join(path, *[('%s' % x) for x in args])
-    return urlparse.urlunsplit([scheme, netloc, path, query, fragment])
-
-
 class ResourceAttributesMixin(object):
     """
-    A Mixin that makes it so that accessing an undefined attribute on a class
-    results in returning a Resource Instance. This Instance can then be used
-    to make calls to the a Resource.
+    A Mixin that allows access to an undefined attribute on a class.
+    Instead of raising an attribute error, the undefined attribute will
+    return a Resource Instance which can be used to make calls to the
+    resource identified by the attribute.
+
+    The type of the resource returned can be overridden by adding a
+    resource_class attribute.
 
     It assumes that a Meta class exists at self._meta with all the required
     attributes.
     """
 
     def __getattr__(self, item):
+        # Don't allow access to 'private' by convention attributes.
+        # @@@: How would this work with resources names that begin with
+        # underscores?
         if item.startswith("_"):
             raise AttributeError(item)
 
-        kwargs = {}
-        for key, value in self._store.iteritems():
-            kwargs[key] = value
-
+        kwargs = copy_kwargs(self._store)
         kwargs.update({"base_url": url_join(self._store["base_url"], item)})
 
-        return Resource(**kwargs)
+        return self._get_resource(**kwargs)
 
 
 class Resource(ResourceAttributesMixin, object):
@@ -68,9 +65,7 @@ class Resource(ResourceAttributesMixin, object):
         if id is None and format is None and url_override is None:
             return self
 
-        kwargs = {}
-        for key, value in self._store.iteritems():
-            kwargs[key] = value
+        kwargs = copy_kwargs(self._store)
 
         if id is not None:
             kwargs["base_url"] = url_join(self._store["base_url"], id)
@@ -86,26 +81,24 @@ class Resource(ResourceAttributesMixin, object):
 
         kwargs["session"] = self._store["session"]
 
-        return self.__class__(**kwargs)
+        return self._get_resource(**kwargs)
 
     def _request(self, method, data=None, files=None, params=None):
-        s = self._store["serializer"]
-        url = self._store["base_url"]
+        serializer = self._store["serializer"]
+        url = self.url()
 
-        if self._store["append_slash"] and not url.endswith("/"):
-            url = url + "/"
-
-        headers = {"accept": s.get_content_type()}
+        headers = {"accept": serializer.get_content_type()}
 
         if not files:
-            headers["content-type"] = s.get_content_type()
+            headers["content-type"] = serializer.get_content_type()
             if data is not None:
-                data = s.dumps(data)
+                data = serializer.dumps(data)
 
         resp = self._store["session"].request(method, url, data=data, params=params, files=files, headers=headers)
 
         if 400 <= resp.status_code <= 499:
-            raise exceptions.HttpClientError("Client Error %s: %s" % (resp.status_code, url), response=resp, content=resp.content)
+            exception_class = exceptions.HttpNotFoundError if resp.status_code == 404 else exceptions.HttpClientError
+            raise exception_class("Client Error %s: %s" % (resp.status_code, url), response=resp, content=resp.content)
         elif 500 <= resp.status_code <= 599:
             raise exceptions.HttpServerError("Server Error %s: %s" % (resp.status_code, url), response=resp, content=resp.content)
 
@@ -116,12 +109,14 @@ class Resource(ResourceAttributesMixin, object):
     def _handle_redirect(self, resp, **kwargs):
         # @@@ Hacky, see description in __call__
         resource_obj = self(url_override=resp.headers["location"])
-        return resource_obj.get(params=kwargs)
+        return resource_obj.get(**kwargs)
 
     def _try_to_serialize_response(self, resp):
         s = self._store["serializer"]
+        if resp.status_code in [204, 205]:
+            return
 
-        if resp.headers.get("content-type", None):
+        if resp.headers.get("content-type", None) and resp.content:
             content_type = resp.headers.get("content-type").split(";")[0].strip()
 
             try:
@@ -129,44 +124,56 @@ class Resource(ResourceAttributesMixin, object):
             except exceptions.SerializerNotAvailable:
                 return resp.content
 
+            if type(resp.content) == bytes:
+                try:
+                    encoding = requests.utils.guess_json_utf(resp.content)
+                    return stype.loads(resp.content.decode(encoding))
+                except:
+                    return resp.content
             return stype.loads(resp.content)
         else:
             return resp.content
 
-    def get(self, **kwargs):
-        resp = self._request("GET", params=kwargs)
+    def _process_response(self, resp):
+        # TODO: something to expose headers and status
+
         if 200 <= resp.status_code <= 299:
             return self._try_to_serialize_response(resp)
         else:
             return  # @@@ We should probably do some sort of error here? (Is this even possible?)
 
-    def post(self, data=None, files=None, **kwargs):
-        s = self._store["serializer"]
+    def url(self):
+        url = self._store["base_url"]
 
+        if self._store["append_slash"] and not url.endswith("/"):
+            url = url + "/"
+
+        return url
+
+    # TODO: refactor these methods - lots of commonality
+    def get(self, **kwargs):
+        resp = self._request("GET", params=kwargs)
+        return self._process_response(resp)
+
+    def options(self, **kwargs):
+        resp = self._request("OPTIONS", params=kwargs)
+        return self._process_response(resp)
+
+    def head(self, **kwargs):
+        resp = self._request("HEAD", params=kwargs)
+        return self._process_response(resp)
+
+    def post(self, data=None, files=None, **kwargs):
         resp = self._request("POST", data=data, files=files, params=kwargs)
-        if 200 <= resp.status_code <= 299:
-            return self._try_to_serialize_response(resp)
-        else:
-            # @@@ Need to be Some sort of Error Here or Something
-            return
+        return self._process_response(resp)
 
     def patch(self, data=None, files=None, **kwargs):
-        s = self._store["serializer"]
-
         resp = self._request("PATCH", data=data, files=files, params=kwargs)
-        if 200 <= resp.status_code <= 299:
-            return self._try_to_serialize_response(resp)
-        else:
-            # @@@ Need to be Some sort of Error Here or Something
-            return
+        return self._process_response(resp)
 
     def put(self, data=None, files=None, **kwargs):
         resp = self._request("PUT", data=data, files=files, params=kwargs)
-
-        if 200 <= resp.status_code <= 299:
-            return self._try_to_serialize_response(resp)
-        else:
-            return False
+        return self._process_response(resp)
 
     def delete(self, **kwargs):
         resp = self._request("DELETE", params=kwargs)
@@ -178,8 +185,13 @@ class Resource(ResourceAttributesMixin, object):
         else:
             return False
 
+    def _get_resource(self, **kwargs):
+        return self.__class__(**kwargs)
+
 
 class API(ResourceAttributesMixin, object):
+
+    resource_class = Resource
 
     def __init__(self, base_url=None, auth=None, format=None, append_slash=True, session=None, serializer=None):
         if serializer is None:
@@ -187,6 +199,8 @@ class API(ResourceAttributesMixin, object):
 
         if session is None:
             session = requests.session()
+
+        if auth is not None:
             session.auth = auth
 
         self._store = {
@@ -200,3 +214,6 @@ class API(ResourceAttributesMixin, object):
         # Do some Checks for Required Values
         if self._store.get("base_url") is None:
             raise exceptions.ImproperlyConfigured("base_url is required")
+
+    def _get_resource(self, **kwargs):
+        return self.resource_class(**kwargs)

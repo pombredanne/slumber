@@ -1,3 +1,6 @@
+from .utils import url_join, iterator
+
+
 class SlumberBaseException(Exception):
     """
     All Slumber exceptions inherit from this exception.
@@ -10,7 +13,7 @@ class SlumberHttpBaseException(SlumberBaseException):
     """
 
     def __init__(self, *args, **kwargs):
-        for key, value in kwargs.iteritems():
+        for key, value in iterator(kwargs):
             setattr(self, key, value)
         super(SlumberHttpBaseException, self).__init__(*args)
 
@@ -18,6 +21,12 @@ class SlumberHttpBaseException(SlumberBaseException):
 class HttpClientError(SlumberHttpBaseException):
     """
     Called when the server tells us there was a client error (4xx).
+    """
+
+
+class HttpNotFoundError(HttpClientError):
+    """
+    Called when the server sends a 404 error.
     """
 
 
